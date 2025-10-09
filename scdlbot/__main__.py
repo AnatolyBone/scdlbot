@@ -1441,50 +1441,27 @@ async def callback_monitor(context: ContextTypes.DEFAULT_TYPE):
     EXECUTOR_TASKS_REMAINING.set(len(EXECUTOR._pending_work_items))
 
 
-def main() -> None:
-    # ============================================================
-    # 1. УДАЛЕНИЕ WEBHOOK (КРИТИЧЕСКИ ВАЖНО!)
-    # ============================================================
-    logger.info("Deleting webhook before starting...")
-    try:
-        response = requests.post(
-            f"{TG_BOT_API}/bot{TG_BOT_TOKEN}/deleteWebhook",
-            json={"drop_pending_updates": True},
-            timeout=10
-        )
-        if response.ok:
-            logger.info(f"✅ Webhook deleted: {response.json()}")
-        else:
-            logger.error(f"❌ Failed to delete webhook: {response.text}")
-    except Exception as e:
-        logger.error(f"❌ Error deleting webhook: {e}")
-
-    # ============================================================
-    # 2. ЗАПУСК PROMETHEUS METRICS
-    # ============================================================
+def main():
+    # Start exposing Prometheus/OpenMetrics metrics:
     prometheus_client.start_http_server(addr=METRICS_HOST, port=METRICS_PORT, registry=REGISTRY)
 
-    # ============================================================
-    # 3. ЗАГРУЗКА PERSISTENCE
-    # ============================================================
     try:
         with open(CHAT_STORAGE, "rb") as file:
-            pickle.load(file)
+            data = pickle.load(file)
         logger.info(f"Pickle file '{CHAT_STORAGE}' loaded successfully.")
-    except (FileNotFoundError, TypeError, Exception) as e:
-        logger.warning(f"Could not load persistence '{CHAT_STORAGE}': {type(e).__name__}. Creating new.")
-        if os.path.exists(CHAT_STORAGE):
-            try:
-                os.remove(CHAT_STORAGE)
-                logger.info(f"Old file '{CHAT_STORAGE}' deleted.")
-            except OSError as remove_error:
-                logger.error(f"Error deleting '{CHAT_STORAGE}': {remove_error}")
+    except FileNotFoundError:
+        logger.info(f"File '{CHAT_STORAGE}' does not exist, will be created.")
+    except TypeError as e:
+        logger.info(f"TypeError: {e}. Deleting file...")
+        os.remove(CHAT_STORAGE)
+        logger.info(f"File '{CHAT_STORAGE}' deleted, will be recreated.")
+    except Exception as e:
+        logger.info(f"Unexpected error: {e}. Deleting file...")
+        os.remove(CHAT_STORAGE)
+        logger.info(f"File '{CHAT_STORAGE}' deleted, will be recreated.")
 
     persistence = PicklePersistence(filepath=CHAT_STORAGE)
 
-    # ============================================================
-    # 4. СОЗДАНИЕ APPLICATION
-    # ============================================================
     application = (
         ApplicationBuilder()
         .token(TG_BOT_TOKEN)
@@ -1506,21 +1483,8 @@ def main() -> None:
         .build()
     )
 
-    # ============================================================
-    # 5. ПОЛУЧЕНИЕ ИМЕНИ БОТА
-    # ============================================================
-    bot_username = "unknown_bot"
-    try:
-        response = requests.get(f"{TG_BOT_API}/bot{TG_BOT_TOKEN}/getMe", timeout=10)
-        response.raise_for_status()
-        bot_username = response.json()["result"]["username"]
-        logger.info(f"✅ Bot username: {bot_username}")
-    except Exception as e:
-        logger.error(f"❌ Could not get bot username: {e}")
-
-    # ============================================================
-    # 6. РЕГИСТРАЦИЯ HANDLERS
-    # ============================================================
+    bot_username = requests.get(f"{TG_BOT_API}/bot{TG_BOT_TOKEN}/getMe").json()["result"]["username"]
+    
     blacklist_whitelist_handler = MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, blacklist_whitelist_callback)
     start_command_handler = CommandHandler("start", start_help_commands_callback)
     help_command_handler = CommandHandler("help", start_help_commands_callback)
@@ -1551,84 +1515,27 @@ def main() -> None:
     application.add_handler(unknown_handler)
     application.add_error_handler(error_callback)
 
-    # ============================================================
-    # 7. JOB QUEUE
-    # ============================================================
     job_queue = application.job_queue
     job_watchdog = job_queue.run_repeating(callback_watchdog, interval=60, first=10)
 
-    # ============================================================
-    # 8. ЗАПУСК БОТА
-    # ============================================================
     if WEBHOOK_ENABLE:
-        logger.error("❌ Webhook mode is not supported. Use WEBHOOK_ENABLE=0")
-        raise SystemExit(1)
-    
-    # HTTP-сервер для healthcheck (Render требует открытый порт)
-    import threading
-    from http.server import SimpleHTTPRequestHandler, HTTPServer
-    
-    port = int(os.getenv("PORT", 10000))
-    
-    class HealthCheckHandler(SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
-        
-        def log_message(self, format, *args):
-            pass  # Отключаем спам в логах
-    
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    logger.info(f"✅ HTTP healthcheck running on port {port}")
-    
-    # Асинхронная функция запуска бота
-    async def run_bot():
-        try:
-            logger.info("🤖 Initializing bot...")
-            await application.initialize()
-            
-            # Удаляем webhook через Bot API (дополнительная страховка)
-            await application.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("✅ Webhook deleted via Bot API")
-            
-            # Запускаем polling
-            logger.info("🚀 Starting polling...")
-            await application.updater.start_polling(
-                poll_interval=1.0,
-                timeout=10,
-                bootstrap_retries=-1,
-                read_timeout=10,
-                write_timeout=10,
-                connect_timeout=10,
-                pool_timeout=10,
-                drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES,
-            )
-            
-            await application.start()
-            logger.info("✅ Bot is running and listening for updates!")
-            
-            # Держим бота живым
-            stop_signal = asyncio.Event()
-            await stop_signal.wait()
-            
-        except Exception as e:
-            logger.error(f"❌ Bot failed to start: {e}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    # Запуск в основном потоке
-    try:
-        asyncio.run(run_bot())
-    except KeyboardInterrupt:
-        logger.info("⛔ Bot stopped by user")
-    except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
-        raise
+        application.run_webhook(
+            drop_pending_updates=True,
+            listen=WEBHOOK_HOST,
+            port=WEBHOOK_PORT,
+            url_path=WEBHOOK_APP_URL_PATH,
+            webhook_url=urljoin(WEBHOOK_APP_URL_ROOT, WEBHOOK_APP_URL_PATH),
+            secret_token=WEBHOOK_SECRET_TOKEN,
+            max_connections=WORKERS * 4,
+            cert=WEBHOOK_CERT_FILE,
+            key=WEBHOOK_KEY_FILE,
+        )
+    else:
+        # КРИТИЧЕСКИ ВАЖНО: удаляем webhook перед polling!
+        application.bot.delete_webhook()
+        application.run_polling(
+            drop_pending_updates=True,
+        )
 
 
 if __name__ == "__main__":
