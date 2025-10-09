@@ -96,7 +96,8 @@ mp_method = "spawn"
 # https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods
 # https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.ProcessPoolExecutor
 # EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=WORKERS, mp_context=get_context(method=mp_method))
-EXECUTOR = ProcessPool(initializer=pp_initializer, initargs=(MAX_MEM,), max_workers=WORKERS, max_tasks=20, context=get_context(method=mp_method))
+# Убираем pp_initializer для совместимости с Python 3.13 + spawn
+EXECUTOR = ProcessPool(max_workers=WORKERS, max_tasks=20, context=get_context(method=mp_method))
 # EXECUTOR = ProcessPool(max_workers=WORKERS, max_tasks=20, context=get_context(method=mp_method))
 DL_TIMEOUT = int(os.getenv("DL_TIMEOUT", 300))
 CHECK_URL_TIMEOUT = int(os.getenv("CHECK_URL_TIMEOUT", 30))
