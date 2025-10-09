@@ -1465,39 +1465,47 @@ def main():
     time.sleep(3)
     
     # 3. Убиваем старые процессы Python
-    logger.info("Checking for old processes...")
-    try:
-        import subprocess
-        current_pid = os.getpid()
-        result = subprocess.run(
-            ["pgrep", "-f", "python.*scdlbot"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.stdout:
-            old_pids = [int(pid) for pid in result.stdout.strip().split('\n') 
-                       if pid and int(pid) != current_pid]
-            if old_pids:
-                logger.warning(f"⚠️ Found old processes: {old_pids}")
-                for pid in old_pids:
-                    try:
-                        os.kill(pid, signal.SIGTERM)  # Сначала мягко
-                        logger.info(f"Sent SIGTERM to PID {pid}")
-                    except:
-                        pass
-                time.sleep(2)
-                # Потом жёстко
-                for pid in old_pids:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                        logger.info(f"Sent SIGKILL to PID {pid}")
-                    except:
-                        pass
-                time.sleep(2)
-                logger.info("✅ Old processes killed")
-    except Exception as e:
-        logger.debug(f"Could not kill old processes: {e}")
+  # 3. Убиваем старые процессы Python
+logger.info("Checking for old processes...")
+try:
+    import subprocess
+    current_pid = os.getpid()
+    logger.info(f"Current PID: {current_pid}")  # ← ДОБАВИЛИ ЛОГ
+    
+    result = subprocess.run(
+        ["pgrep", "-f", "python.*scdlbot"],
+        capture_output=True,
+        text=True,
+        timeout=5
+    )
+    if result.stdout:
+        all_pids = [int(pid) for pid in result.stdout.strip().split('\n') if pid]
+        # ФИЛЬТРУЕМ: исключаем PID=1 (init) и текущий процесс
+        old_pids = [pid for pid in all_pids 
+                   if pid != current_pid and pid != 1]
+        
+        if old_pids:
+            logger.warning(f"⚠️ Found old processes: {old_pids}")
+            for pid in old_pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    logger.info(f"Sent SIGTERM to PID {pid}")
+                except:
+                    pass
+            time.sleep(2)
+            # Потом жёстко
+            for pid in old_pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    logger.info(f"Sent SIGKILL to PID {pid}")
+                except:
+                    pass
+            time.sleep(2)
+            logger.info("✅ Old processes killed")
+        else:
+            logger.info("✅ No old processes found")
+except Exception as e:
+    logger.debug(f"Could not kill old processes: {e}")
     
     # 4. Lock file
     lock_file = "/tmp/scdlbot.lock"
