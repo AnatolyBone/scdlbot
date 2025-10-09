@@ -1427,61 +1427,30 @@ async def callback_monitor(context: ContextTypes.DEFAULT_TYPE):
     EXECUTOR_TASKS_REMAINING.set(len(EXECUTOR._pending_work_items))
 
 
-def main():
+def main() -> None:
     # Start exposing Prometheus/OpenMetrics metrics:
     prometheus_client.start_http_server(addr=METRICS_HOST, port=METRICS_PORT, registry=REGISTRY)
-    # Dummy HTTP server for Render port binding
-    import threading
-    from http.server import SimpleHTTPRequestHandler, HTTPServer
-
-    def start_dummy_server():
-        import os
-        port = int(os.getenv("PORT", 5000))  # Render sets this automatically
-        server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-        logger.info(f"Starting dummy HTTP server on port {port} to satisfy Render health checks...")
-        server.serve_forever()
-
-    threading.Thread(target=start_dummy_server, daemon=True).start()
-
-    # Maybe we can use token again if we will buy SoundCloud Go+
-    # https://github.com/flyingrub/scdl/issues/429
-    # if sc_auth_token:
-    #     config = configparser.ConfigParser()
-    #     config['scdl'] = {}
-    #     config['scdl']['path'] = DL_DIR
-    #     config['scdl']['auth_token'] = sc_auth_token
-    #     config_dir = os.path.join(os.path.expanduser('~'), '.config', 'scdl')
-    #     config_path = os.path.join(config_dir, 'scdl.cfg')
-    #     os.makedirs(config_dir, exist_ok=True)
-    #     with open(config_path, 'w') as config_file:
-    #         config.write(config_file)
 
     try:
         with open(CHAT_STORAGE, "rb") as file:
-            data = pickle.load(file)
+            pickle.load(file)
         logger.info(f"Pickle file '{CHAT_STORAGE}' loaded successfully. Can continue loading persistence.")
-    except FileNotFoundError:
-        logger.info(f"The file '{CHAT_STORAGE}' does not exist, it will be created from scratch.")
-    except TypeError as e:
-        logger.info(f"TypeError occurred: {e}. Deleting the file...")
-        os.remove(CHAT_STORAGE)
-        logger.info(f"File '{CHAT_STORAGE}' has been deleted, it will be created from scratch.")
-    except Exception as e:
-        logger.info(f"An unexpected error occurred: {e}. Deleting the file...")
-        os.remove(CHAT_STORAGE)
-        logger.info(f"File '{CHAT_STORAGE}' has been deleted, it will be created from scratch.")
+    except (FileNotFoundError, TypeError, Exception) as e:
+        logger.warning(f"Could not load persistence file '{CHAT_STORAGE}' due to {type(e).__name__}: {e}. It will be created from scratch.")
+        if os.path.exists(CHAT_STORAGE):
+            try:
+                os.remove(CHAT_STORAGE)
+                logger.info(f"File '{CHAT_STORAGE}' has been deleted.")
+            except OSError as remove_error:
+                logger.error(f"Error deleting file '{CHAT_STORAGE}': {remove_error}")
+
 
     persistence = PicklePersistence(filepath=CHAT_STORAGE)
 
-    # https://docs.python-telegram-bot.org/en/v20.1/telegram.ext.applicationbuilder.html#telegram.ext.ApplicationBuilder
-    # We use concurrent_updates with limit instead of unlimited create_task.
-    # https://github.com/python-telegram-bot/python-telegram-bot/wiki/Concurrency#applicationconcurrent_updates
-    # https://github.com/python-telegram-bot/python-telegram-bot/issues/3509
     application = (
         ApplicationBuilder()
         .token(TG_BOT_TOKEN)
         .local_mode(TG_BOT_API_LOCAL_MODE)
-        # https://github.com/python-telegram-bot/python-telegram-bot/issues/3556
         .http_version(HTTP_VERSION)
         .get_updates_http_version(HTTP_VERSION)
         .base_url(f"{TG_BOT_API}/bot")
@@ -1499,7 +1468,17 @@ def main():
         .build()
     )
 
-    bot_username = requests.get(f"{TG_BOT_API}/bot{TG_BOT_TOKEN}/getMe").json()["result"]["username"]
+    bot_username = "unknown_bot" # Default value
+    try:
+        # Пытаемся получить имя бота синхронно
+        response = requests.get(f"{TG_BOT_API}/bot{TG_BOT_TOKEN}/getMe", timeout=10)
+        response.raise_for_status()
+        bot_username = response.json()["result"]["username"]
+        logger.info(f"Successfully got bot username: {bot_username}")
+    except Exception as e:
+        logger.error(f"Could not get bot username: {e}. Using default.")
+
+
     blacklist_whitelist_handler = MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, blacklist_whitelist_callback)
     start_command_handler = CommandHandler("start", start_help_commands_callback)
     help_command_handler = CommandHandler("help", start_help_commands_callback)
@@ -1534,51 +1513,28 @@ def main():
     job_watchdog = job_queue.run_repeating(callback_watchdog, interval=60, first=10)
     # job_monitor = job_queue.run_repeating(callback_monitor, interval=5, first=5)
 
+    # Важно: WEBHOOK_ENABLE должен быть равен "0" для этого режима.
     if WEBHOOK_ENABLE:
-        application.run_webhook(
-            drop_pending_updates=True,
-            listen=WEBHOOK_HOST,
-            port=WEBHOOK_PORT,
-            url_path=WEBHOOK_APP_URL_PATH,
-            webhook_url=urljoin(WEBHOOK_APP_URL_ROOT, WEBHOOK_APP_URL_PATH),
-            secret_token=WEBHOOK_SECRET_TOKEN,
-            max_connections=WORKERS * 4,
-            cert=WEBHOOK_CERT_FILE,
-            key=WEBHOOK_KEY_FILE,
+        logger.error("Webhook mode is not supported with this startup script. Use polling.")
+    else:
+        # Запускаем бота в режиме polling в отдельном потоке
+        import threading
+        logger.info("Preparing to start polling in a separate thread...")
+        bot_thread = threading.Thread(
+            target=application.run_polling,
+            kwargs={"drop_pending_updates": True}
         )
-    else:
-        # TODO await it somehow or change to something like this:
-        # https://docs.python-telegram-bot.org/en/stable/telegram.bot.html
-        # https://docs.python-telegram-bot.org/en/stable/telegram.ext.application.html#telegram.ext.Application.run_polling
-        # https://github.com/python-telegram-bot/python-telegram-bot/discussions/3310
-        # https://github.com/python-telegram-bot/python-telegram-bot/wiki/Frequently-requested-design-patterns#running-ptb-alongside-other-asyncio-frameworks
-        # https://docs.python-telegram-bot.org/en/v21.5/examples.customwebhookbot.html
-        if __name__ == "__main__":
-    # Сначала чистим старый webhook (чтобы Telegram не путался)
-    application.bot.delete_webhook(drop_pending_updates=True)
+        bot_thread.daemon = True # Поток завершится, если основной поток умрет
+        bot_thread.start()
+        logger.info("Bot polling started in a separate thread.")
 
-    if WEBHOOK_ENABLE:
-        import asyncio
+        # Основной поток запускает dummy HTTP-сервер, чтобы Render был доволен
+        from http.server import SimpleHTTPRequestHandler, HTTPServer
+        port = int(os.getenv("PORT", 10000))  # Render предоставляет переменную PORT
+        server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+        logger.info(f"Starting dummy HTTP server on port {port} to satisfy Render health checks...")
+        server.serve_forever()
 
-        async def run_webhook():
-            WEBHOOK_URL = f"{WEBHOOK_APP_URL_ROOT.rstrip('/')}/{WEBHOOK_APP_URL_PATH.lstrip('/')}"
-            logger.info(f"Starting in WEBHOOK mode. URL: {WEBHOOK_URL}")
 
-            await application.bot.set_webhook(
-                url=WEBHOOK_URL,
-                secret_token=WEBHOOK_SECRET_TOKEN,
-                certificate=open(WEBHOOK_CERT_FILE, "rb") if WEBHOOK_CERT_FILE else None,
-            )
-
-            await application.run_webhook(
-                listen=WEBHOOK_HOST,
-                port=WEBHOOK_PORT,
-                secret_token=WEBHOOK_SECRET_TOKEN,
-                webhook_url=WEBHOOK_URL,
-            )
-
-        asyncio.run(run_webhook())
-
-    else:
-        logger.info("Starting in POLLING mode")
-        application.run_polling(drop_pending_updates=True)
+if __name__ == "__main__":
+    main()
