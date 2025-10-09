@@ -1479,6 +1479,7 @@ def main() -> None:
         .connect_timeout(COMMON_CONNECTION_TIMEOUT)
         .read_timeout(COMMON_CONNECTION_TIMEOUT)
         .write_timeout(COMMON_CONNECTION_TIMEOUT)
+        .shutdown_signals(None) # <<< ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ
         .build()
     )
 
@@ -1528,25 +1529,20 @@ def main() -> None:
     # job_monitor = job_queue.run_repeating(callback_monitor, interval=5, first=5)
 
     # Важно: WEBHOOK_ENABLE должен быть равен "0" для этого режима.
-    # Важно: WEBHOOK_ENABLE должен быть равен "0" для этого режима.
     if WEBHOOK_ENABLE:
         logger.error("Webhook mode is not supported with this startup script. Use polling.")
     else:
         # Запускаем бота в режиме polling в отдельном потоке
         import threading
-        import asyncio
-
         logger.info("Preparing to start polling in a separate thread...")
-
-        def start_polling():
-            # Создаём event loop вручную, чтобы Python 3.13 не ругался
-            asyncio.set_event_loop(asyncio.new_event_loop())
-            application.run_polling(drop_pending_updates=True)
-
-        # Запускаем polling в отдельном потоке
-        polling_thread = threading.Thread(target=start_polling)
-        polling_thread.start()
-
+        
+        bot_thread = threading.Thread(
+            target=application.run_polling,
+            kwargs={"drop_pending_updates": True}
+        )
+        bot_thread.daemon = True # Поток завершится, если основной поток умрет
+        bot_thread.start()
+        
         logger.info("Bot polling started in a separate thread.")
 
         # Основной поток запускает dummy HTTP-сервер, чтобы Render был доволен
