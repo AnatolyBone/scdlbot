@@ -1515,10 +1515,34 @@ def main():
     application.add_handler(unknown_handler)
     application.add_error_handler(error_callback)
 
-    job_queue = application.job_queue
+        job_queue = application.job_queue
     job_watchdog = job_queue.run_repeating(callback_watchdog, interval=60, first=10)
 
-       if WEBHOOK_ENABLE:
+    # ==========================================
+    # HTTP-СЕРВЕР ДЛЯ RENDER.COM (обязательно!)
+    # ==========================================
+    import threading
+    from http.server import SimpleHTTPRequestHandler, HTTPServer
+    
+    class HealthHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Bot is running")
+        def log_message(self, *args):
+            pass
+    
+    http_port = int(os.getenv("PORT", 5000))
+    http_server = HTTPServer(("0.0.0.0", http_port), HealthHandler)
+    http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    http_thread.start()
+    logger.info(f"✅ HTTP health check on port {http_port}")
+
+    # ==========================================
+    # ЗАПУСК БОТА
+    # ==========================================
+    if WEBHOOK_ENABLE:
         application.run_webhook(
             drop_pending_updates=True,
             listen=WEBHOOK_HOST,
@@ -1531,8 +1555,10 @@ def main():
             key=WEBHOOK_KEY_FILE,
         )
     else:
-        # ИСПРАВЛЕНО: await через asyncio.run()
+        # Удаляем webhook перед polling
         asyncio.run(application.bot.delete_webhook(drop_pending_updates=True))
+        logger.info("✅ Webhook deleted, starting polling...")
+        
         application.run_polling(
             drop_pending_updates=True,
         )
