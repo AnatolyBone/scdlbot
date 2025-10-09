@@ -1512,15 +1512,13 @@ def main():
     application.add_handler(link_command_handler)
     application.add_handler(message_with_links_handler)
     application.add_handler(button_query_handler)
-    application.add_handler(unknown_handler)
+        application.add_handler(unknown_handler)
     application.add_error_handler(error_callback)
 
-        job_queue = application.job_queue
+    job_queue = application.job_queue
     job_watchdog = job_queue.run_repeating(callback_watchdog, interval=60, first=10)
 
-    # ==========================================
-    # HTTP-СЕРВЕР ДЛЯ RENDER.COM (обязательно!)
-    # ==========================================
+    # HTTP-сервер для Render.com (обязательно!)
     import threading
     from http.server import SimpleHTTPRequestHandler, HTTPServer
     
@@ -1530,6 +1528,7 @@ def main():
             self.send_header("Content-type", "text/plain")
             self.end_headers()
             self.wfile.write(b"Bot is running")
+        
         def log_message(self, *args):
             pass
     
@@ -1537,11 +1536,8 @@ def main():
     http_server = HTTPServer(("0.0.0.0", http_port), HealthHandler)
     http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
     http_thread.start()
-    logger.info(f"✅ HTTP health check on port {http_port}")
+    logger.info(f"HTTP health check on port {http_port}")
 
-    # ==========================================
-    # ЗАПУСК БОТА
-    # ==========================================
     if WEBHOOK_ENABLE:
         application.run_webhook(
             drop_pending_updates=True,
@@ -1555,13 +1551,8 @@ def main():
             key=WEBHOOK_KEY_FILE,
         )
     else:
-        # Удаляем webhook перед polling
         asyncio.run(application.bot.delete_webhook(drop_pending_updates=True))
-        logger.info("✅ Webhook deleted, starting polling...")
-        
-        application.run_polling(
-            drop_pending_updates=True,
-        )
+        application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
