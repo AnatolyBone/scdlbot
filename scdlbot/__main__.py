@@ -1462,25 +1462,27 @@ def main() -> None:
     persistence = PicklePersistence(filepath=CHAT_STORAGE)
 
     application = (
-    ApplicationBuilder()
-    .token(TG_BOT_TOKEN)
-    .local_mode(TG_BOT_API_LOCAL_MODE)
-    .http_version(HTTP_VERSION)
-    .get_updates_http_version(HTTP_VERSION)
-    .base_url(f"{TG_BOT_API}/bot")
-    .base_file_url(f"{TG_BOT_API}/file/bot")
-    .persistence(persistence)
-    .post_init(post_init)
-    .post_shutdown(post_shutdown)
-    .rate_limiter(AIORateLimiter(max_retries=3))
-    .concurrent_updates(WORKERS * 2)
-    .connection_pool_size(WORKERS * 4)
-    .pool_timeout(COMMON_CONNECTION_TIMEOUT)
-    .connect_timeout(COMMON_CONNECTION_TIMEOUT)
-    .read_timeout(COMMON_CONNECTION_TIMEOUT)
-    .write_timeout(COMMON_CONNECTION_TIMEOUT)
-    .build()
-)
+        ApplicationBuilder()
+        .token(TG_BOT_TOKEN)
+        .local_mode(TG_BOT_API_LOCAL_MODE)
+        .http_version(HTTP_VERSION)
+        .get_updates_http_version(HTTP_VERSION)
+        .base_url(f"{TG_BOT_API}/bot")
+        .base_file_url(f"{TG_BOT_API}/file/bot")
+        .persistence(persistence)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .rate_limiter(AIORateLimiter(max_retries=3))
+        .concurrent_updates(WORKERS * 2)
+        .connection_pool_size(WORKERS * 4)
+        .pool_timeout(COMMON_CONNECTION_TIMEOUT)
+        .connect_timeout(COMMON_CONNECTION_TIMEOUT)
+        .read_timeout(COMMON_CONNECTION_TIMEOUT)
+        .write_timeout(COMMON_CONNECTION_TIMEOUT)
+        .shutdown_signals(None)
+        .build()
+    )
+
     bot_username = "unknown_bot" # Default value
     try:
         # Пытаемся получить имя бота синхронно
@@ -1528,36 +1530,37 @@ def main() -> None:
 
     # Важно: WEBHOOK_ENABLE должен быть равен "0" для этого режима.
     if WEBHOOK_ENABLE:
-    logger.error("Webhook mode is not supported with this startup script. Use polling.")
-else:
-    # Запускаем бота в режиме polling в отдельном потоке
-    import threading
-    import asyncio
-    
-    def run_bot_in_thread():
-        """Создает новый event loop для потока и запускает бота."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Запускаем polling, который будет использовать этот loop
-            application.run_polling(drop_pending_updates=True)
-        finally:
-            loop.close()
+        logger.error("Webhook mode is not supported with this startup script. Use polling.")
+    else:
+        # Запускаем бота в режиме polling в отдельном потоке
+        import threading
+        import asyncio
+        
+        def run_bot_in_thread():
+            """Создает новый event loop для потока и запускает бота."""
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                # Запускаем polling, который будет использовать этот loop
+                application.run_polling(drop_pending_updates=True)
+            finally:
+                loop.close()
 
-    logger.info("Preparing to start polling in a separate thread...")
-    
-    bot_thread = threading.Thread(target=run_bot_in_thread)
-    bot_thread.daemon = True # Поток завершится, если основной поток умрет
-    bot_thread.start()
-    
-    logger.info("Bot polling started in a separate thread.")
+        logger.info("Preparing to start polling in a separate thread...")
+        
+        bot_thread = threading.Thread(target=run_bot_in_thread)
+        bot_thread.daemon = True # Поток завершится, если основной поток умрет
+        bot_thread.start()
+        
+        logger.info("Bot polling started in a separate thread.")
 
-    # Основной поток запускает dummy HTTP-сервер, чтобы Render был доволен
-    from http.server import SimpleHTTPRequestHandler, HTTPServer
-    port = int(os.getenv("PORT", 10000))  # Render предоставляет переменную PORT
-    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-    logger.info(f"Starting dummy HTTP server on port {port} to satisfy Render health checks...")
-    server.serve_forever()
+        # Основной поток запускает dummy HTTP-сервер, чтобы Render был доволен
+        from http.server import SimpleHTTPRequestHandler, HTTPServer
+        port = int(os.getenv("PORT", 10000))  # Render предоставляет переменную PORT
+        server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+        logger.info(f"Starting dummy HTTP server on port {port} to satisfy Render health checks...")
+        server.serve_forever()
+
 
 if __name__ == "__main__":
     main()
