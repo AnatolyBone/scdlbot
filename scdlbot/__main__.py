@@ -1528,28 +1528,36 @@ def main() -> None:
 
     # Важно: WEBHOOK_ENABLE должен быть равен "0" для этого режима.
     if WEBHOOK_ENABLE:
-        logger.error("Webhook mode is not supported with this startup script. Use polling.")
-    else:
-        # Запускаем бота в режиме polling в отдельном потоке
-        import threading
-        logger.info("Preparing to start polling in a separate thread...")
-        
-        bot_thread = threading.Thread(
-            target=application.run_polling,
-            kwargs={"drop_pending_updates": True}
-        )
-        bot_thread.daemon = True # Поток завершится, если основной поток умрет
-        bot_thread.start()
-        
-        logger.info("Bot polling started in a separate thread.")
+    logger.error("Webhook mode is not supported with this startup script. Use polling.")
+else:
+    # Запускаем бота в режиме polling в отдельном потоке
+    import threading
+    import asyncio
+    
+    def run_bot_in_thread():
+        """Создает новый event loop для потока и запускает бота."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Запускаем polling, который будет использовать этот loop
+            application.run_polling(drop_pending_updates=True)
+        finally:
+            loop.close()
 
-        # Основной поток запускает dummy HTTP-сервер, чтобы Render был доволен
-        from http.server import SimpleHTTPRequestHandler, HTTPServer
-        port = int(os.getenv("PORT", 10000))  # Render предоставляет переменную PORT
-        server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-        logger.info(f"Starting dummy HTTP server on port {port} to satisfy Render health checks...")
-        server.serve_forever()
+    logger.info("Preparing to start polling in a separate thread...")
+    
+    bot_thread = threading.Thread(target=run_bot_in_thread)
+    bot_thread.daemon = True # Поток завершится, если основной поток умрет
+    bot_thread.start()
+    
+    logger.info("Bot polling started in a separate thread.")
 
+    # Основной поток запускает dummy HTTP-сервер, чтобы Render был доволен
+    from http.server import SimpleHTTPRequestHandler, HTTPServer
+    port = int(os.getenv("PORT", 10000))  # Render предоставляет переменную PORT
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    logger.info(f"Starting dummy HTTP server on port {port} to satisfy Render health checks...")
+    server.serve_forever()
 
 if __name__ == "__main__":
     main()
