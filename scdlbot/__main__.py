@@ -1461,6 +1461,7 @@ def main() -> None:
 
     persistence = PicklePersistence(filepath=CHAT_STORAGE)
 
+    # УБИРАЕМ .shutdown_signals(None) ИЗ ЭТОГО БЛОКА
     application = (
         ApplicationBuilder()
         .token(TG_BOT_TOKEN)
@@ -1479,7 +1480,6 @@ def main() -> None:
         .connect_timeout(COMMON_CONNECTION_TIMEOUT)
         .read_timeout(COMMON_CONNECTION_TIMEOUT)
         .write_timeout(COMMON_CONNECTION_TIMEOUT)
-        .shutdown_signals(None)
         .build()
     )
 
@@ -1528,37 +1528,36 @@ def main() -> None:
     job_watchdog = job_queue.run_repeating(callback_watchdog, interval=60, first=10)
     # job_monitor = job_queue.run_repeating(callback_monitor, interval=5, first=5)
 
-    # Важно: WEBHOOK_ENABLE должен быть равен "0" для этого режима.
+    # НОВЫЙ, ИСПРАВЛЕННЫЙ СПОСОБ ЗАПУСКА
+    async def run_bot_async():
+        """Асинхронно запускает бота и держит его в работе."""
+        await application.initialize()
+        await application.updater.start_polling()
+        await application.start()
+        logger.info("Bot has been started.")
+        # Бесконечный цикл, чтобы корутина не завершалась
+        while True:
+            await asyncio.sleep(3600)
+
+    def run_in_thread():
+        """Обертка для запуска асинхронного кода в отдельном потоке."""
+        asyncio.run(run_bot_async())
+
     if WEBHOOK_ENABLE:
         logger.error("Webhook mode is not supported with this startup script. Use polling.")
     else:
-        # Запускаем бота в режиме polling в отдельном потоке
         import threading
-        import asyncio
-        
-        def run_bot_in_thread():
-            """Создает новый event loop для потока и запускает бота."""
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                # Запускаем polling, который будет использовать этот loop
-                application.run_polling(drop_pending_updates=True)
-            finally:
-                loop.close()
-
-        logger.info("Preparing to start polling in a separate thread...")
-        
-        bot_thread = threading.Thread(target=run_bot_in_thread)
-        bot_thread.daemon = True # Поток завершится, если основной поток умрет
+        logger.info("Preparing to start bot in a separate thread...")
+        bot_thread = threading.Thread(target=run_in_thread)
+        bot_thread.daemon = True
         bot_thread.start()
-        
-        logger.info("Bot polling started in a separate thread.")
+        logger.info("Bot thread started.")
 
-        # Основной поток запускает dummy HTTP-сервер, чтобы Render был доволен
+        # Основной поток запускает dummy HTTP-сервер
         from http.server import SimpleHTTPRequestHandler, HTTPServer
-        port = int(os.getenv("PORT", 10000))  # Render предоставляет переменную PORT
+        port = int(os.getenv("PORT", 10000))
         server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-        logger.info(f"Starting dummy HTTP server on port {port} to satisfy Render health checks...")
+        logger.info(f"Starting dummy HTTP server on port {port}...")
         server.serve_forever()
 
 
