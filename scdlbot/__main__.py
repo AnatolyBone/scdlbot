@@ -1518,7 +1518,7 @@ def main():
     job_queue = application.job_queue
     job_watchdog = job_queue.run_repeating(callback_watchdog, interval=60, first=10)
 
-    if WEBHOOK_ENABLE:
+       if WEBHOOK_ENABLE:
         application.run_webhook(
             drop_pending_updates=True,
             listen=WEBHOOK_HOST,
@@ -1531,8 +1531,8 @@ def main():
             key=WEBHOOK_KEY_FILE,
         )
     else:
-        # КРИТИЧЕСКИ ВАЖНО: удаляем webhook перед polling!
-        application.bot.delete_webhook()
+        # ИСПРАВЛЕНО: await через asyncio.run()
+        asyncio.run(application.bot.delete_webhook(drop_pending_updates=True))
         application.run_polling(
             drop_pending_updates=True,
         )
