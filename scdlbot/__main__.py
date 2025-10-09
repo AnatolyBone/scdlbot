@@ -128,26 +128,41 @@ BLACKLIST_TELEGRAM_DOMAINS = [
     "contest.com",
     "contest.dev",
 ]
-WHITELIST_DOMAINS = {}
+# --- Whitelist / Blacklist configuration ---
+
+# Domains
+WHITELIST_DOMAINS = set()
 if "WHITELIST_DOMAINS" in os.environ:
-    WHITELIST_DOMAINS = set(x for x in os.getenv("WHITELIST_DOMAINS").split(","))
-BLACKLIST_DOMAINS = {}
+    WHITELIST_DOMAINS = set(
+        x.strip() for x in os.getenv("WHITELIST_DOMAINS", "").split(",") if x.strip()
+    )
+
+BLACKLIST_DOMAINS = set()
 if "BLACKLIST_DOMAINS" in os.environ:
-    BLACKLIST_DOMAINS = set(x for x in os.getenv("BLACKLIST_DOMAINS").split(","))
-WHITELIST_CHATS = []
+    BLACKLIST_DOMAINS = set(
+        x.strip() for x in os.getenv("BLACKLIST_DOMAINS", "").split(",") if x.strip()
+    )
+
+# Chats
+WHITELIST_CHATS = set()
 if "WHITELIST_CHATS" in os.environ:
     try:
-        WHITELIST_CHATS = set(int(x) for x in os.getenv("WHITELIST_CHATS").split(","))
+        WHITELIST_CHATS = set(
+            int(x.strip()) for x in os.getenv("WHITELIST_CHATS", "").split(",") if x.strip()
+        )
     except ValueError:
         raise ValueError("Your whitelisted chats list does not contain valid integers.")
-BLACKLIST_CHATS = []
+
+BLACKLIST_CHATS = set()
 if "BLACKLIST_CHATS" in os.environ:
     try:
-        BLACKLIST_CHATS = set(int(x) for x in os.getenv("BLACKLIST_CHATS").split(","))
+        BLACKLIST_CHATS = set(
+            int(x.strip()) for x in os.getenv("BLACKLIST_CHATS", "").split(",") if x.strip()
+        )
     except ValueError:
         raise ValueError("Your blacklisted chats list does not contain valid integers.")
 
-# Webhook:
+# --- Webhook configuration ---
 WEBHOOK_ENABLE = bool(int(os.getenv("WEBHOOK_ENABLE", "0")))
 WEBHOOK_HOST = os.getenv("HOST", "127.0.0.1")
 WEBHOOK_PORT = int(os.getenv("PORT", "5000"))
@@ -156,7 +171,6 @@ WEBHOOK_APP_URL_PATH = os.getenv("WEBHOOK_APP_URL_PATH", TG_BOT_TOKEN.replace(":
 WEBHOOK_CERT_FILE = os.getenv("WEBHOOK_CERT_FILE", None)
 WEBHOOK_KEY_FILE = os.getenv("WEBHOOK_KEY_FILE", None)
 WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", None)
-
 # Prometheus metrics:
 METRICS_HOST = os.getenv("METRICS_HOST", "127.0.0.1")
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
