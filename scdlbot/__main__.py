@@ -3,6 +3,7 @@
 import asyncio
 import concurrent.futures
 import datetime
+import fcntl          # ← ДОБАВЬТЕ ЭТУ СТРОКУ
 import logging
 import os
 import pathlib
@@ -12,6 +13,8 @@ import random
 import re
 import resource
 import shutil
+import signal         # ← ДОБАВЬТЕ ЭТУ СТРОКУ
+import sys            # ← ДОБАВЬТЕ ЭТУ СТРОКУ
 import tempfile
 import threading
 import time
@@ -1441,8 +1444,116 @@ async def callback_monitor(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    
+    # ============================================================
+    # УБИВАЕМ СТАРЫЕ ПРОЦЕССЫ И ОЧИЩАЕМ WEBHOOK
+    # ============================================================
+    
+    # 1. Удаляем webhook через API (может висеть от прошлых запусков)
+    logger.info("Clearing webhook...")
+    try:
+        requests.post(
+            f"{TG_BOT_API}/bot{TG_BOT_TOKEN}/deleteWebhook",
+            json={"drop_pending_updates": True},
+            timeout=10
+        )
+        logger.info("✅ Webhook cleared")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not clear webhook: {e}")
+    
+    # 2. Ждём завершения старых getUpdates запросов
+    time.sleep(3)
+    
+    # 3. Убиваем старые процессы Python
+    logger.info("Checking for old processes...")
+    try:
+        import subprocess
+        current_pid = os.getpid()
+        result = subprocess.run(
+            ["pgrep", "-f", "python.*scdlbot"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.stdout:
+            old_pids = [int(pid) for pid in result.stdout.strip().split('\n') 
+                       if pid and int(pid) != current_pid]
+            if old_pids:
+                logger.warning(f"⚠️ Found old processes: {old_pids}")
+                for pid in old_pids:
+                    try:
+                        os.kill(pid, signal.SIGTERM)  # Сначала мягко
+                        logger.info(f"Sent SIGTERM to PID {pid}")
+                    except:
+                        pass
+                time.sleep(2)
+                # Потом жёстко
+                for pid in old_pids:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        logger.info(f"Sent SIGKILL to PID {pid}")
+                    except:
+                        pass
+                time.sleep(2)
+                logger.info("✅ Old processes killed")
+    except Exception as e:
+        logger.debug(f"Could not kill old processes: {e}")
+    
+    # 4. Lock file
+    lock_file = "/tmp/scdlbot.lock"
+    
+    # Удаляем старый lock если есть
+    if os.path.exists(lock_file):
+        try:
+            os.remove(lock_file)
+            logger.info("Removed old lock file")
+        except:
+            pass
+    
+    lock_fd = open(lock_file, 'w')
+    
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        logger.info("✅ Lock acquired")
+    except IOError:
+        logger.error("❌ Lock still held, waiting 10s...")
+        time.sleep(10)
+        try:
+            # Принудительно удаляем lock
+            os.remove(lock_file)
+            lock_fd = open(lock_file, 'w')
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            logger.info("✅ Lock acquired after cleanup")
+        except Exception as e:
+            logger.error(f"❌ Cannot acquire lock: {e}")
+            sys.exit(1)
+    
+    # 5. Signal handlers для graceful shutdown
+    def signal_handler(sig, frame):
+        logger.info(f"⛔ Received signal {sig}")
+        try:
+            EXECUTOR.stop()
+            EXECUTOR.join(timeout=3)
+        except:
+            pass
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+            os.remove(lock_file)
+        except:
+            pass
+        logger.info("⛔ Shutdown complete")
+        sys.exit(0)
+    
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # ============================================================
+    # ДАЛЬШЕ ВАШ ОБЫЧНЫЙ КОД
+    # ============================================================
     prometheus_client.start_http_server(addr=METRICS_HOST, port=METRICS_PORT, registry=REGISTRY)
-
+    
+    # ... весь остальной код main()
     try:
         with open(CHAT_STORAGE, "rb") as file:
             data = pickle.load(file)
