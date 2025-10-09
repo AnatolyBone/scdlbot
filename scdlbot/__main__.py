@@ -1553,11 +1553,32 @@ def main():
         # https://github.com/python-telegram-bot/python-telegram-bot/discussions/3310
         # https://github.com/python-telegram-bot/python-telegram-bot/wiki/Frequently-requested-design-patterns#running-ptb-alongside-other-asyncio-frameworks
         # https://docs.python-telegram-bot.org/en/v21.5/examples.customwebhookbot.html
-        application.bot.delete_webhook()
-        application.run_polling(
-            drop_pending_updates=True,
-        )
+        if __name__ == "__main__":
+    # Сначала чистим старый webhook (чтобы Telegram не путался)
+    application.bot.delete_webhook(drop_pending_updates=True)
 
+    if WEBHOOK_ENABLE:
+        import asyncio
 
-if __name__ == "__main__":
-    main()
+        async def run_webhook():
+            WEBHOOK_URL = f"{WEBHOOK_APP_URL_ROOT.rstrip('/')}/{WEBHOOK_APP_URL_PATH.lstrip('/')}"
+            logger.info(f"Starting in WEBHOOK mode. URL: {WEBHOOK_URL}")
+
+            await application.bot.set_webhook(
+                url=WEBHOOK_URL,
+                secret_token=WEBHOOK_SECRET_TOKEN,
+                certificate=open(WEBHOOK_CERT_FILE, "rb") if WEBHOOK_CERT_FILE else None,
+            )
+
+            await application.run_webhook(
+                listen=WEBHOOK_HOST,
+                port=WEBHOOK_PORT,
+                secret_token=WEBHOOK_SECRET_TOKEN,
+                webhook_url=WEBHOOK_URL,
+            )
+
+        asyncio.run(run_webhook())
+
+    else:
+        logger.info("Starting in POLLING mode")
+        application.run_polling(drop_pending_updates=True)
