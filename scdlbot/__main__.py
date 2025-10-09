@@ -1442,7 +1442,6 @@ async def callback_monitor(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    # Start exposing Prometheus/OpenMetrics metrics:
     prometheus_client.start_http_server(addr=METRICS_HOST, port=METRICS_PORT, registry=REGISTRY)
 
     try:
@@ -1548,8 +1547,9 @@ def main():
             key=WEBHOOK_KEY_FILE,
         )
     else:
-        asyncio.run(application.bot.delete_webhook(drop_pending_updates=True))
-        application.run_polling(drop_pending_updates=True)
+        application.run_polling(
+            drop_pending_updates=True,
+        )
 
 
 if __name__ == "__main__":
