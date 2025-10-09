@@ -1430,6 +1430,18 @@ async def callback_monitor(context: ContextTypes.DEFAULT_TYPE):
 def main():
     # Start exposing Prometheus/OpenMetrics metrics:
     prometheus_client.start_http_server(addr=METRICS_HOST, port=METRICS_PORT, registry=REGISTRY)
+    # Dummy HTTP server for Render port binding
+    import threading
+    from http.server import SimpleHTTPRequestHandler, HTTPServer
+
+    def start_dummy_server():
+        import os
+        port = int(os.getenv("PORT", 5000))  # Render sets this automatically
+        server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+        logger.info(f"Starting dummy HTTP server on port {port} to satisfy Render health checks...")
+        server.serve_forever()
+
+    threading.Thread(target=start_dummy_server, daemon=True).start()
 
     # Maybe we can use token again if we will buy SoundCloud Go+
     # https://github.com/flyingrub/scdl/issues/429
