@@ -1544,22 +1544,48 @@ def main() -> None:
         asyncio.run(run_bot_async())
 
     if WEBHOOK_ENABLE:
-        logger.error("Webhook mode is not supported with this startup script. Use polling.")
-    else:
-        import threading
-        logger.info("Preparing to start bot in a separate thread...")
-        bot_thread = threading.Thread(target=run_in_thread)
-        bot_thread.daemon = True
-        bot_thread.start()
-        logger.info("Bot thread started.")
-
-        # Основной поток запускает dummy HTTP-сервер
-        from http.server import SimpleHTTPRequestHandler, HTTPServer
-        port = int(os.getenv("PORT", 10000))
-        server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-        logger.info(f"Starting dummy HTTP server on port {port}...")
-        server.serve_forever()
-
-
-if __name__ == "__main__":
-    main()
+    logger.error("Webhook mode is not supported with this startup script. Use polling.")
+    raise SystemExit(1)
+else:
+    import threading
+    from http.server import SimpleHTTPRequestHandler, HTTPServer
+    
+    logger.info("Starting bot in polling mode...")
+    
+    # Запускаем HTTP-сервер в ОТДЕЛЬНОМ потоке (для healthcheck)
+    port = int(os.getenv("PORT", 10000))
+    
+    class HealthCheckHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK")
+        
+        def log_message(self, format, *args):
+            pass  # Отключаем логи HTTP-сервера
+    
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    logger.info(f"HTTP healthcheck server started on port {port}")
+    
+    # Запускаем бота в ОСНОВНОМ потоке
+    async def run_bot():
+        await application.initialize()
+        await application.updater.start_polling(
+            drop_pending_updates=True,  # ← ВАЖНО!
+            allowed_updates=Update.ALL_TYPES
+        )
+        await application.start()
+        logger.info("Bot started successfully and listening for updates")
+        
+        # Держим бота живым
+        while True:
+            await asyncio.sleep(3600)
+    
+    # Запуск в основном потоке
+    try:
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
