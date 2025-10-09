@@ -1512,14 +1512,13 @@ def main():
     application.add_handler(link_command_handler)
     application.add_handler(message_with_links_handler)
     application.add_handler(button_query_handler)
-        application.add_handler(unknown_handler)
+    application.add_handler(unknown_handler)
     application.add_error_handler(error_callback)
 
     job_queue = application.job_queue
     job_watchdog = job_queue.run_repeating(callback_watchdog, interval=60, first=10)
 
-    # HTTP-сервер для Render.com (обязательно!)
-    import threading
+    # HTTP server for Render.com
     from http.server import SimpleHTTPRequestHandler, HTTPServer
     
     class HealthHandler(SimpleHTTPRequestHandler):
@@ -1527,16 +1526,14 @@ def main():
             self.send_response(200)
             self.send_header("Content-type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Bot is running")
-        
+            self.wfile.write(b"OK")
         def log_message(self, *args):
             pass
     
     http_port = int(os.getenv("PORT", 5000))
     http_server = HTTPServer(("0.0.0.0", http_port), HealthHandler)
-    http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
-    http_thread.start()
-    logger.info(f"HTTP health check on port {http_port}")
+    threading.Thread(target=http_server.serve_forever, daemon=True).start()
+    logger.info(f"HTTP server on port {http_port}")
 
     if WEBHOOK_ENABLE:
         application.run_webhook(
