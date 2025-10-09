@@ -89,10 +89,8 @@ scdl_bin = local[os.path.join(BIN_PATH, "scdl")]
 bcdl_bin = local[os.path.join(BIN_PATH, "bandcamp-dl")]
 BCDL_ENABLE = True
 WORKERS = int(os.getenv("WORKERS", 2))
-# TODO 'fork' is prohibited, doesn't work. Maybe change to 'spawn' on all platforms
-mp_method = "forkserver"
-if platform.system() == "Windows":
-    mp_method = "spawn"
+# Python 3.13 имеет проблемы с forkserver - используем spawn
+mp_method = "spawn"
 # https://stackoverflow.com/a/66113051
 # https://superfastpython.com/processpoolexecutor-multiprocessing-context/
 # https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods
