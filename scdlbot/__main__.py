@@ -3,7 +3,6 @@
 import asyncio
 import concurrent.futures
 import datetime
-import fcntl          # ← ДОБАВЬТЕ ЭТУ СТРОКУ
 import logging
 import os
 import pathlib
@@ -13,8 +12,6 @@ import random
 import re
 import resource
 import shutil
-import signal         # ← ДОБАВЬТЕ ЭТУ СТРОКУ
-import sys            # ← ДОБАВЬТЕ ЭТУ СТРОКУ
 import tempfile
 import threading
 import time
@@ -92,15 +89,16 @@ scdl_bin = local[os.path.join(BIN_PATH, "scdl")]
 bcdl_bin = local[os.path.join(BIN_PATH, "bandcamp-dl")]
 BCDL_ENABLE = True
 WORKERS = int(os.getenv("WORKERS", 2))
-# Python 3.13 имеет проблемы с forkserver - используем spawn
-mp_method = "spawn"
+# TODO 'fork' is prohibited, doesn't work. Maybe change to 'spawn' on all platforms
+mp_method = "forkserver"
+if platform.system() == "Windows":
+    mp_method = "spawn"
 # https://stackoverflow.com/a/66113051
 # https://superfastpython.com/processpoolexecutor-multiprocessing-context/
 # https://docs.python.org/3/library/multiprocessing.html#contexts-and-start-methods
 # https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.ProcessPoolExecutor
 # EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=WORKERS, mp_context=get_context(method=mp_method))
-# Убираем pp_initializer для совместимости с Python 3.13 + spawn
-EXECUTOR = ProcessPool(max_workers=WORKERS, max_tasks=20, context=get_context(method=mp_method))
+EXECUTOR = ProcessPool(initializer=pp_initializer, initargs=(MAX_MEM,), max_workers=WORKERS, max_tasks=20, context=get_context(method=mp_method))
 # EXECUTOR = ProcessPool(max_workers=WORKERS, max_tasks=20, context=get_context(method=mp_method))
 DL_TIMEOUT = int(os.getenv("DL_TIMEOUT", 300))
 CHECK_URL_TIMEOUT = int(os.getenv("CHECK_URL_TIMEOUT", 30))
@@ -130,41 +128,26 @@ BLACKLIST_TELEGRAM_DOMAINS = [
     "contest.com",
     "contest.dev",
 ]
-# --- Whitelist / Blacklist configuration ---
-
-# Domains
-WHITELIST_DOMAINS = set()
+WHITELIST_DOMAINS = {}
 if "WHITELIST_DOMAINS" in os.environ:
-    WHITELIST_DOMAINS = set(
-        x.strip() for x in os.getenv("WHITELIST_DOMAINS", "").split(",") if x.strip()
-    )
-
-BLACKLIST_DOMAINS = set()
+    WHITELIST_DOMAINS = set(x for x in os.getenv("WHITELIST_DOMAINS").split(","))
+BLACKLIST_DOMAINS = {}
 if "BLACKLIST_DOMAINS" in os.environ:
-    BLACKLIST_DOMAINS = set(
-        x.strip() for x in os.getenv("BLACKLIST_DOMAINS", "").split(",") if x.strip()
-    )
-
-# Chats
-WHITELIST_CHATS = set()
+    BLACKLIST_DOMAINS = set(x for x in os.getenv("BLACKLIST_DOMAINS").split(","))
+WHITELIST_CHATS = []
 if "WHITELIST_CHATS" in os.environ:
     try:
-        WHITELIST_CHATS = set(
-            int(x.strip()) for x in os.getenv("WHITELIST_CHATS", "").split(",") if x.strip()
-        )
+        WHITELIST_CHATS = set(int(x) for x in os.getenv("WHITELIST_CHATS").split(","))
     except ValueError:
         raise ValueError("Your whitelisted chats list does not contain valid integers.")
-
-BLACKLIST_CHATS = set()
+BLACKLIST_CHATS = []
 if "BLACKLIST_CHATS" in os.environ:
     try:
-        BLACKLIST_CHATS = set(
-            int(x.strip()) for x in os.getenv("BLACKLIST_CHATS", "").split(",") if x.strip()
-        )
+        BLACKLIST_CHATS = set(int(x) for x in os.getenv("BLACKLIST_CHATS").split(","))
     except ValueError:
         raise ValueError("Your blacklisted chats list does not contain valid integers.")
 
-# --- Webhook configuration ---
+# Webhook:
 WEBHOOK_ENABLE = bool(int(os.getenv("WEBHOOK_ENABLE", "0")))
 WEBHOOK_HOST = os.getenv("HOST", "127.0.0.1")
 WEBHOOK_PORT = int(os.getenv("PORT", "5000"))
@@ -173,6 +156,7 @@ WEBHOOK_APP_URL_PATH = os.getenv("WEBHOOK_APP_URL_PATH", TG_BOT_TOKEN.replace(":
 WEBHOOK_CERT_FILE = os.getenv("WEBHOOK_CERT_FILE", None)
 WEBHOOK_KEY_FILE = os.getenv("WEBHOOK_KEY_FILE", None)
 WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", None)
+
 # Prometheus metrics:
 METRICS_HOST = os.getenv("METRICS_HOST", "127.0.0.1")
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
@@ -1444,145 +1428,48 @@ async def callback_monitor(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    
-    # ============================================================
-    # УБИВАЕМ СТАРЫЕ ПРОЦЕССЫ И ОЧИЩАЕМ WEBHOOK
-    # ============================================================
-    
-    # 1. Удаляем webhook через API (может висеть от прошлых запусков)
-    logger.info("Clearing webhook...")
-    try:
-        requests.post(
-            f"{TG_BOT_API}/bot{TG_BOT_TOKEN}/deleteWebhook",
-            json={"drop_pending_updates": True},
-            timeout=10
-        )
-        logger.info("✅ Webhook cleared")
-    except Exception as e:
-        logger.warning(f"⚠️ Could not clear webhook: {e}")
-    
-    # 2. Ждём завершения старых getUpdates запросов
-    time.sleep(3)
-    
-    # 3. Убиваем старые процессы Python
-  # 3. Убиваем старые процессы Python
-logger.info("Checking for old processes...")
-try:
-    import subprocess
-    current_pid = os.getpid()
-    logger.info(f"Current PID: {current_pid}")  # ← ДОБАВИЛИ ЛОГ
-    
-    result = subprocess.run(
-        ["pgrep", "-f", "python.*scdlbot"],
-        capture_output=True,
-        text=True,
-        timeout=5
-    )
-    if result.stdout:
-        all_pids = [int(pid) for pid in result.stdout.strip().split('\n') if pid]
-        # ФИЛЬТРУЕМ: исключаем PID=1 (init) и текущий процесс
-        old_pids = [pid for pid in all_pids 
-                   if pid != current_pid and pid != 1]
-        
-        if old_pids:
-            logger.warning(f"⚠️ Found old processes: {old_pids}")
-            for pid in old_pids:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    logger.info(f"Sent SIGTERM to PID {pid}")
-                except:
-                    pass
-            time.sleep(2)
-            # Потом жёстко
-            for pid in old_pids:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                    logger.info(f"Sent SIGKILL to PID {pid}")
-                except:
-                    pass
-            time.sleep(2)
-            logger.info("✅ Old processes killed")
-        else:
-            logger.info("✅ No old processes found")
-except Exception as e:
-    logger.debug(f"Could not kill old processes: {e}")
-    
-    # 4. Lock file
-    lock_file = "/tmp/scdlbot.lock"
-    
-    # Удаляем старый lock если есть
-    if os.path.exists(lock_file):
-        try:
-            os.remove(lock_file)
-            logger.info("Removed old lock file")
-        except:
-            pass
-    
-    lock_fd = open(lock_file, 'w')
-    
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        logger.info("✅ Lock acquired")
-    except IOError:
-        logger.error("❌ Lock still held, waiting 10s...")
-        time.sleep(10)
-        try:
-            # Принудительно удаляем lock
-            os.remove(lock_file)
-            lock_fd = open(lock_file, 'w')
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            logger.info("✅ Lock acquired after cleanup")
-        except Exception as e:
-            logger.error(f"❌ Cannot acquire lock: {e}")
-            sys.exit(1)
-    
-    # 5. Signal handlers для graceful shutdown
-    def signal_handler(sig, frame):
-        logger.info(f"⛔ Received signal {sig}")
-        try:
-            EXECUTOR.stop()
-            EXECUTOR.join(timeout=3)
-        except:
-            pass
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            lock_fd.close()
-            os.remove(lock_file)
-        except:
-            pass
-        logger.info("⛔ Shutdown complete")
-        sys.exit(0)
-    
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    # ============================================================
-    # ДАЛЬШЕ ВАШ ОБЫЧНЫЙ КОД
-    # ============================================================
+    # Start exposing Prometheus/OpenMetrics metrics:
     prometheus_client.start_http_server(addr=METRICS_HOST, port=METRICS_PORT, registry=REGISTRY)
-    
-    # ... весь остальной код main()
+
+    # Maybe we can use token again if we will buy SoundCloud Go+
+    # https://github.com/flyingrub/scdl/issues/429
+    # if sc_auth_token:
+    #     config = configparser.ConfigParser()
+    #     config['scdl'] = {}
+    #     config['scdl']['path'] = DL_DIR
+    #     config['scdl']['auth_token'] = sc_auth_token
+    #     config_dir = os.path.join(os.path.expanduser('~'), '.config', 'scdl')
+    #     config_path = os.path.join(config_dir, 'scdl.cfg')
+    #     os.makedirs(config_dir, exist_ok=True)
+    #     with open(config_path, 'w') as config_file:
+    #         config.write(config_file)
+
     try:
         with open(CHAT_STORAGE, "rb") as file:
             data = pickle.load(file)
-        logger.info(f"Pickle file '{CHAT_STORAGE}' loaded successfully.")
+        logger.info(f"Pickle file '{CHAT_STORAGE}' loaded successfully. Can continue loading persistence.")
     except FileNotFoundError:
-        logger.info(f"File '{CHAT_STORAGE}' does not exist, will be created.")
+        logger.info(f"The file '{CHAT_STORAGE}' does not exist, it will be created from scratch.")
     except TypeError as e:
-        logger.info(f"TypeError: {e}. Deleting file...")
+        logger.info(f"TypeError occurred: {e}. Deleting the file...")
         os.remove(CHAT_STORAGE)
-        logger.info(f"File '{CHAT_STORAGE}' deleted, will be recreated.")
+        logger.info(f"File '{CHAT_STORAGE}' has been deleted, it will be created from scratch.")
     except Exception as e:
-        logger.info(f"Unexpected error: {e}. Deleting file...")
+        logger.info(f"An unexpected error occurred: {e}. Deleting the file...")
         os.remove(CHAT_STORAGE)
-        logger.info(f"File '{CHAT_STORAGE}' deleted, will be recreated.")
+        logger.info(f"File '{CHAT_STORAGE}' has been deleted, it will be created from scratch.")
 
     persistence = PicklePersistence(filepath=CHAT_STORAGE)
 
+    # https://docs.python-telegram-bot.org/en/v20.1/telegram.ext.applicationbuilder.html#telegram.ext.ApplicationBuilder
+    # We use concurrent_updates with limit instead of unlimited create_task.
+    # https://github.com/python-telegram-bot/python-telegram-bot/wiki/Concurrency#applicationconcurrent_updates
+    # https://github.com/python-telegram-bot/python-telegram-bot/issues/3509
     application = (
         ApplicationBuilder()
         .token(TG_BOT_TOKEN)
         .local_mode(TG_BOT_API_LOCAL_MODE)
+        # https://github.com/python-telegram-bot/python-telegram-bot/issues/3556
         .http_version(HTTP_VERSION)
         .get_updates_http_version(HTTP_VERSION)
         .base_url(f"{TG_BOT_API}/bot")
@@ -1601,7 +1488,6 @@ except Exception as e:
     )
 
     bot_username = requests.get(f"{TG_BOT_API}/bot{TG_BOT_TOKEN}/getMe").json()["result"]["username"]
-    
     blacklist_whitelist_handler = MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, blacklist_whitelist_callback)
     start_command_handler = CommandHandler("start", start_help_commands_callback)
     help_command_handler = CommandHandler("help", start_help_commands_callback)
@@ -1634,23 +1520,7 @@ except Exception as e:
 
     job_queue = application.job_queue
     job_watchdog = job_queue.run_repeating(callback_watchdog, interval=60, first=10)
-
-    # HTTP server for Render.com
-    from http.server import SimpleHTTPRequestHandler, HTTPServer
-    
-    class HealthHandler(SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
-        def log_message(self, *args):
-            pass
-    
-    http_port = int(os.getenv("PORT", 5000))
-    http_server = HTTPServer(("0.0.0.0", http_port), HealthHandler)
-    threading.Thread(target=http_server.serve_forever, daemon=True).start()
-    logger.info(f"HTTP server on port {http_port}")
+    # job_monitor = job_queue.run_repeating(callback_monitor, interval=5, first=5)
 
     if WEBHOOK_ENABLE:
         application.run_webhook(
@@ -1665,6 +1535,13 @@ except Exception as e:
             key=WEBHOOK_KEY_FILE,
         )
     else:
+        # TODO await it somehow or change to something like this:
+        # https://docs.python-telegram-bot.org/en/stable/telegram.bot.html
+        # https://docs.python-telegram-bot.org/en/stable/telegram.ext.application.html#telegram.ext.Application.run_polling
+        # https://github.com/python-telegram-bot/python-telegram-bot/discussions/3310
+        # https://github.com/python-telegram-bot/python-telegram-bot/wiki/Frequently-requested-design-patterns#running-ptb-alongside-other-asyncio-frameworks
+        # https://docs.python-telegram-bot.org/en/v21.5/examples.customwebhookbot.html
+        application.bot.delete_webhook()
         application.run_polling(
             drop_pending_updates=True,
         )
